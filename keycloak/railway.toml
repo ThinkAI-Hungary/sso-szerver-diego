@@ -3,4 +3,4 @@
   dockerfilePath = "Dockerfile"
 
 [deploy]
-  startCommand = "sh -c 'mkdir -p /tmp/keycloak-tx-object-store /tmp/h2 && /opt/keycloak/bin/kc.sh start --optimized'"
+  startCommand = "sh -c 'mkdir -p /tmp/keycloak-tx-object-store && /opt/keycloak/bin/kc.sh start --optimized'"

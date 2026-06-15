@@ -15,6 +15,7 @@ ENV KC_TRANSACTION_XA_ENABLED=false
 ENV KC_HEALTH_ENABLED=true
 ENV KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false
 ENV KC_METRICS_ENABLED=false
+ENV KC_DB=postgres
 
 RUN /opt/keycloak/bin/kc.sh build
 
@@ -23,9 +24,6 @@ RUN /opt/keycloak/bin/kc.sh build
 # FONTOS: ez UTAN kell lennie a "kc.sh build"-nek, kulonben "Multiple GC selected" hiba
 ENV JAVA_OPTS_APPEND="-Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:-UseG1GC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20"
 
-# H2 atiranyitasa /tmp-be (Railway /opt/keycloak/data nem irhato)
-# FIGYELEM: /tmp ephemeralis — minden redeploy torol mindent
-ENV KC_DB_URL="jdbc:h2:file:/tmp/h2/keycloakdb;;AUTO_SERVER=TRUE"
 
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
 CMD ["start", "--optimized"]
