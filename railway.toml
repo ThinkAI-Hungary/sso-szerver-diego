@@ -7,6 +7,7 @@
 
 [services.sync-backend]
   source = "sync-backend"
+  builder = "DOCKERFILE"
   [services.sync-backend.deploy]
     healthcheckPath = "/health"
     healthcheckTimeout = 30
