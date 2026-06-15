@@ -1,0 +1,16 @@
+learnworlds_keycloak_sso_osszefoglalo.md
+
+# Kornyezeti valtozok — soha ne keruljenek a repo-ba
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# JAR binarisok — letoltodik build ido alatt, nem tarolunk binarist a repo-ban
+# Ha szeretned version-trackelni a JAR-t, kommenteld ki ezt a sort:
+keycloak/providers/*.jar

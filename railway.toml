@@ -1,0 +1,12 @@
+[services.keycloak]
+  source = "keycloak"
+  [services.keycloak.deploy]
+    startCommand = "start"
+    healthcheckPath = "/health/ready"
+    healthcheckTimeout = 300
+
+[services.sync-backend]
+  source = "sync-backend"
+  [services.sync-backend.deploy]
+    healthcheckPath = "/health"
+    healthcheckTimeout = 30
