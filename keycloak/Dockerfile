@@ -10,11 +10,5 @@ FROM quay.io/keycloak/keycloak:25.0.0
 COPY --from=downloader /keycloak-webhook-provider-core.jar /opt/keycloak/providers/
 COPY --from=downloader /keycloak-webhook-provider-http.jar /opt/keycloak/providers/
 
-ENV KC_TRANSACTION_XA_ENABLED=false
-ENV QUARKUS_TRANSACTION_MANAGER_OBJECT_STORE_DIRECTORY=/tmp/keycloak-tx-object-store
-ENV KC_HEALTH_ENABLED=true
-
-RUN /opt/keycloak/bin/kc.sh build
-
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
-CMD ["start", "--optimized"]
+CMD ["start-dev"]
