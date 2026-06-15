@@ -10,6 +10,8 @@ FROM quay.io/keycloak/keycloak:25.0.0
 COPY --from=downloader /keycloak-webhook-provider-core.jar /opt/keycloak/providers/
 COPY --from=downloader /keycloak-webhook-provider-http.jar /opt/keycloak/providers/
 
+ENV KC_TRANSACTION_XA_ENABLED=false
+
 RUN /opt/keycloak/bin/kc.sh build
 
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
