@@ -13,4 +13,4 @@ COPY --from=downloader /keycloak-webhook-provider-http.jar /opt/keycloak/provide
 RUN /opt/keycloak/bin/kc.sh build
 
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
-CMD ["start"]
+CMD ["start", "--optimized"]
