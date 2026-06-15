@@ -1,13 +1,7 @@
-[services.keycloak]
-  source = "keycloak"
-  [services.keycloak.deploy]
-    startCommand = "start"
-    healthcheckPath = "/health/ready"
-    healthcheckTimeout = 300
-
-[services.sync-backend]
-  source = "sync-backend"
-  builder = "DOCKERFILE"
-  [services.sync-backend.deploy]
-    healthcheckPath = "/health"
-    healthcheckTimeout = 30
+# Railway does not support [services.*] multi-service format.
+# Each service has its own railway.toml in its subdirectory:
+#   keycloak/railway.toml
+#   sync-backend/railway.toml
+#
+# In the Railway dashboard, set the Root Directory for each service
+# to the matching subdirectory (keycloak or sync-backend).
