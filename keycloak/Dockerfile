@@ -16,12 +16,12 @@ ENV KC_HEALTH_ENABLED=true
 ENV KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false
 ENV KC_METRICS_ENABLED=false
 
+RUN /opt/keycloak/bin/kc.sh build
+
 # JVM memoria korlatozas — Railway free tier kontener limit (~512MB-1GB)
 # Alapertelmezett Keycloak: -XX:MaxRAMPercentage=70 + MetaspaceSize=256m → OOM kill
-# SerialGC: kisebb GC overhead, mint G1GC (fontos kicsi kontenerben)
-ENV JAVA_OPTS_APPEND="-Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20"
-
-RUN /opt/keycloak/bin/kc.sh build
+# FONTOS: ez UTAN kell lennie a "kc.sh build"-nek, kulonben "Multiple GC selected" hiba
+ENV JAVA_OPTS_APPEND="-Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:-UseG1GC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20"
 
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
 CMD ["start", "--optimized"]

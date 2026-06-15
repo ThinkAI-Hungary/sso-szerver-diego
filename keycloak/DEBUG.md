@@ -70,15 +70,24 @@ Keycloak 25.0.0 + vymalo webhook provider futtatása Railway-en, custom Docker i
 - **Ok:** A volume van csatolva, de a Keycloak user nem tud írni az `/opt/keycloak/data` könyvtárba
 - **Fix:** `/tmp/keycloak-tx-object-store` használata a startCommand-ban
 
-### 9. Silent OOM crash az Infinispan indulása után
-- **Hiba:** Log megszakad az Infinispan sor után, nincs error — kernel OOM kill (SIGKILL)
-- **Ok:** `-XX:MaxRAMPercentage=70` + `-XX:MaxMetaspaceSize=256m` → Railway memóriakeret felett
-- **Várható fix:** `JAVA_OPTS_APPEND=-Xms64m -Xmx256m -XX:MaxMetaspaceSize=128m` vagy Railway memory limit növelése
+### 9. Silent OOM crash az Infinispan indulasa utan
+- **Hiba:** Log megszakad az Infinispan sor utan, nincs error -- kernel OOM kill (SIGKILL)
+- **Ok:** `-XX:MaxRAMPercentage=70` + `-XX:MaxMetaspaceSize=256m` --> Railway memoriakeretet meghaladja
+- **Fix:** `JAVA_OPTS_APPEND` Dockerfile-ban beallitva:
+  ```
+  -Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
+  ```
+  - Heap: max 384MB (alapertelmezett ~700MB helyett)
+  - Metaspace: max 128MB (alapertelmezett 256MB helyett)
+  - SerialGC: kisebb GC overhead, mint G1GC
+  - HeapFreeRatio: agressziv heap visszaadas az OS-nek
+  - Teljes becsult JVM memoria: ~592MB (384 + 128 + ~80 native)
 
-## Jelenlegi állapot
+## Jelenlegi allapot
 
-- Dockerfile: optimized image, JAR-ok benne, `KC_HEALTH_ENABLED=true`, `KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false` beégetve
+- Dockerfile: optimized image, JAR-ok benne, `KC_HEALTH_ENABLED=true`, `KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false`, `JAVA_OPTS_APPEND` beeegetve
 - railway.toml: startCommand `mkdir /tmp/...` + `start --optimized`, nincs healthcheckPath
-- Railway dashboard: health check path törölve
+- Railway dashboard: health check path torolve
 - Railway Variables: KC_BOOTSTRAP_ADMIN_*, KC_HOSTNAME, KC_HTTP_ENABLED, KC_PROXY_HEADERS, KC_HEALTH_ENABLED, KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false, KC_TRANSACTION_XA_ENABLED=false, QUARKUS_*
-- **Következő lépés:** OOM fix — JAVA_OPTS_APPEND vagy Railway memory limit növelése
+- **Kovetkezo lepes:** Deploy es tesztelni, hogy az OOM fix megoldja-e az indulast
+
