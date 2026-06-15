@@ -58,3 +58,27 @@ Keycloak 25.0.0 + vymalo webhook provider futtatása Railway-en, custom Docker i
 - A `/health/ready` Keycloak 25-ben valóban csak a 9000-es porton van? Hogyan lehet azt Railway-en elérni?
 - `KC_LEGACY_OBSERVABILITY_INTERFACE=true` esetleg áthozza a 8080-ra?
 - Kell-e Postgres a stabil működéshez, vagy H2 + volume megoldja?
+
+### 7. Health check port probléma - "/health" 9000-es porton
+- **Hiba:** `1/1 replicas never became healthy!` - Keycloak fut, de health check fail
+- **Ok:** Keycloak 25-ben a `/health/ready` endpoint a **9000-es management porton** van, NEM a 8080-as főporton. Railway a főportot (8080) ellenőrzi HTTP-vel.
+- **Próbált fix:** `KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false` - letiltja a management portot, de NEM mozgatja a health endpointot a 8080-ra
+- **Jelenlegi megközelítés:** Railway dashboard-on health check path törölve, TCP port check marad
+
+### 8. /opt/keycloak/data permission denied
+- **Hiba:** `mkdir: cannot create directory '/opt/keycloak/data/tx-object-store': Permission denied`
+- **Ok:** A volume van csatolva, de a Keycloak user nem tud írni az `/opt/keycloak/data` könyvtárba
+- **Fix:** `/tmp/keycloak-tx-object-store` használata a startCommand-ban
+
+### 9. Silent OOM crash az Infinispan indulása után
+- **Hiba:** Log megszakad az Infinispan sor után, nincs error — kernel OOM kill (SIGKILL)
+- **Ok:** `-XX:MaxRAMPercentage=70` + `-XX:MaxMetaspaceSize=256m` → Railway memóriakeret felett
+- **Várható fix:** `JAVA_OPTS_APPEND=-Xms64m -Xmx256m -XX:MaxMetaspaceSize=128m` vagy Railway memory limit növelése
+
+## Jelenlegi állapot
+
+- Dockerfile: optimized image, JAR-ok benne, `KC_HEALTH_ENABLED=true`, `KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false` beégetve
+- railway.toml: startCommand `mkdir /tmp/...` + `start --optimized`, nincs healthcheckPath
+- Railway dashboard: health check path törölve
+- Railway Variables: KC_BOOTSTRAP_ADMIN_*, KC_HOSTNAME, KC_HTTP_ENABLED, KC_PROXY_HEADERS, KC_HEALTH_ENABLED, KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false, KC_TRANSACTION_XA_ENABLED=false, QUARKUS_*
+- **Következő lépés:** OOM fix — JAVA_OPTS_APPEND vagy Railway memory limit növelése
