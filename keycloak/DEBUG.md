@@ -73,21 +73,27 @@ Keycloak 25.0.0 + vymalo webhook provider futtatása Railway-en, custom Docker i
 ### 9. Silent OOM crash az Infinispan indulasa utan
 - **Hiba:** Log megszakad az Infinispan sor utan, nincs error -- kernel OOM kill (SIGKILL)
 - **Ok:** `-XX:MaxRAMPercentage=70` + `-XX:MaxMetaspaceSize=256m` --> Railway memoriakeretet meghaladja
-- **Fix:** `JAVA_OPTS_APPEND` Dockerfile-ban beallitva:
+- **Fix:** `JAVA_OPTS_APPEND` Dockerfile-ban beallitva (a `kc.sh build` UTAN, kulonben "Multiple GC selected" hiba):
   ```
-  -Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
+  -Xms64m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:-UseG1GC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
   ```
-  - Heap: max 384MB (alapertelmezett ~700MB helyett)
-  - Metaspace: max 128MB (alapertelmezett 256MB helyett)
-  - SerialGC: kisebb GC overhead, mint G1GC
-  - HeapFreeRatio: agressziv heap visszaadas az OS-nek
-  - Teljes becsult JVM memoria: ~592MB (384 + 128 + ~80 native)
 
-## Jelenlegi allapot
+### 10. H2 v2 Liquibase migration hiba
+- **Hiba:** `Syntax error in SQL statement ... REPLACE(VALUE ...)` -- H2 v2-ben VALUE reserved keyword
+- **Ok:** Keycloak 25 H2 v2.2.224-et tartalmaz, de a regi Liquibase migracok (8.0.0) nem kompatibilisek vele
+- **Fix:** H2 nem hasznalhato production modban KC 25-tel. **PostgreSQL szukseges.**
+- **Railway Postgres:** "Add PostgreSQL" service, KC_DB=postgres build-time ENV, KC_DB_URL/USERNAME/PASSWORD runtime
 
-- Dockerfile: optimized image, JAR-ok benne, `KC_HEALTH_ENABLED=true`, `KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false`, `JAVA_OPTS_APPEND` beeegetve
-- railway.toml: startCommand `mkdir /tmp/...` + `start --optimized`, nincs healthcheckPath
-- Railway dashboard: health check path torolve
-- Railway Variables: KC_BOOTSTRAP_ADMIN_*, KC_HOSTNAME, KC_HTTP_ENABLED, KC_PROXY_HEADERS, KC_HEALTH_ENABLED, KC_HTTP_MANAGEMENT_HEALTH_ENABLED=false, KC_TRANSACTION_XA_ENABLED=false, QUARKUS_*
-- **Kovetkezo lepes:** Deploy es tesztelni, hogy az OOM fix megoldja-e az indulast
+### 11. Volume interferencia -- "Loading the Admin UI" vegtelen toltes
+- **Hiba:** Admin UI sosem toltodott be, megragadt "Loading the Admin UI"-nal
+- **Ok:** Regi Railway volume csatolva /opt/keycloak/data-ra, korrupt/regi H2 adat zavarba hozta a Keycloak-ot
+- **Fix:** Volume torlese Railway dashboard-on. Postgres-szel nincs szukseg volume-ra.
+
+## Jelenlegi allapot — MUKODIK
+
+- Dockerfile: optimized image, webhook JAR-ok, KC_DB=postgres, JAVA_OPTS_APPEND beeegetve
+- railway.toml: startCommand mkdir /tmp/... + start --optimized
+- Railway: Postgres service csatolva, volume torolve
+- Admin UI elerheto
+- **Kovetkezo lepes:** Realm konfiguracio, LearnWorlds OIDC client beallitas, webhook teszteles
 
