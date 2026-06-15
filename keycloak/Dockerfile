@@ -11,6 +11,7 @@ COPY --from=downloader /keycloak-webhook-provider-core.jar /opt/keycloak/provide
 COPY --from=downloader /keycloak-webhook-provider-http.jar /opt/keycloak/providers/
 
 ENV KC_TRANSACTION_XA_ENABLED=false
+ENV QUARKUS_TRANSACTION_MANAGER_OBJECT_STORE_DIRECTORY=/tmp/keycloak-tx-object-store
 
 RUN /opt/keycloak/bin/kc.sh build
 
