@@ -4,5 +4,3 @@
 
 [deploy]
   startCommand = "sh -c 'mkdir -p /opt/keycloak/data/tx-object-store && /opt/keycloak/bin/kc.sh start --optimized'"
-  healthcheckPath = "/health/ready"
-  healthcheckTimeout = 300
