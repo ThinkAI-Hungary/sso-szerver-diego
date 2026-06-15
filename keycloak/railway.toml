@@ -3,6 +3,6 @@
   dockerfilePath = "Dockerfile"
 
 [deploy]
-  startCommand = "/opt/keycloak/bin/kc.sh start-dev --http-port=8080 --hostname-strict=false"
+  startCommand = "sh -c 'mkdir -p /opt/keycloak/data/tx-object-store && /opt/keycloak/bin/kc.sh start --optimized'"
   healthcheckPath = "/health/ready"
   healthcheckTimeout = 300
