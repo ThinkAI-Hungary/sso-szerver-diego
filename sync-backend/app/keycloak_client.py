@@ -28,7 +28,7 @@ class KeycloakClient:
     """
 
     def __init__(self) -> None:
-        self._base_url = settings.keycloak_url.rstrip("/")
+        self._base_url = settings.keycloak_base_url.rstrip("/")
         self._realm = settings.keycloak_realm
         self._client_id = settings.keycloak_client_id
         self._client_secret = settings.keycloak_client_secret

@@ -38,8 +38,8 @@ SYNC_EVENT_TYPES = {"LOGIN", "REGISTER", "UPDATE_PROFILE"}
 async def lifespan(app: FastAPI):
     logger.info(
         "SSO sync backend indul | Keycloak: %s | LearnWorlds: %s",
-        settings.keycloak_url,
-        settings.learnworlds_school_id,
+        settings.keycloak_base_url,
+        settings.learnworlds_school,
     )
     yield
     logger.info("SSO sync backend leall")
@@ -170,7 +170,7 @@ async def _get_keycloak_user_email(user_id: str) -> str | None:
     import httpx
 
     token = await kc_client._get_token()
-    url = f"{settings.keycloak_url.rstrip('/')}/admin/realms/{settings.keycloak_realm}/users/{user_id}"
+    url = f"{settings.keycloak_base_url.rstrip('/')}/admin/realms/{settings.keycloak_realm}/users/{user_id}"
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(

@@ -19,7 +19,7 @@ class LearnWorldsClient:
 
     def __init__(self) -> None:
         self._headers = {
-            "Lw-Client": settings.learnworlds_school_id,
+            "Lw-Client": settings.learnworlds_school,
             "Authorization": f"Bearer {settings.learnworlds_api_key}",
             "Content-Type": "application/json",
         }
