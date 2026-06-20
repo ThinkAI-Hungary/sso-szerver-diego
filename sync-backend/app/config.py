@@ -10,12 +10,19 @@ class Settings(BaseSettings):
     keycloak_client_id: str  # dedikalt service account client ID
     keycloak_client_secret: str
 
-    # LearnWorlds API
+    # LearnWorlds API (egyszerű API kulcs - meglévő műveletek)
     learnworlds_api_key: str
     learnworlds_school: str  # pl. academyhu.diego.hu
 
+    # LearnWorlds OAuth2 (SSO link generáláshoz szükséges)
+    learnworlds_client_id: str = ""
+    learnworlds_client_secret: str = ""
+
+    # Magic link végpont védelme
+    magic_link_secret: str = ""  # üres = nincs védelem (csak fejlesztésben)
+
     # Webhook biztonsag
-    webhook_secret: str  # ugyanaz, mint KC WEBHOOK_HTTP_SHARED_SECRET
+    webhook_secret: str = ""  # ugyanaz, mint KC WEBHOOK_HTTP_SHARED_SECRET
 
     # Port (Railway automatikusan beallitja)
     port: int = 8000

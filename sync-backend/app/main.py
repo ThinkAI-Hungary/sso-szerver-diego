@@ -3,7 +3,7 @@ import sys
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.config import settings
 from app.keycloak_client import KeycloakClient
@@ -59,6 +59,48 @@ app = FastAPI(
 @app.get("/health", tags=["system"])
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Magic link endpoint
+# ---------------------------------------------------------------------------
+@app.get("/magic-link", tags=["sso"])
+async def magic_link(email: str, key: str | None = None) -> RedirectResponse:
+    """
+    Egyszeri SSO belépési linket generál a megadott email-hez, majd átirányít.
+    A user automatikusan be lesz lépve a LearnWorlds webes felületén.
+
+    Védelem: ha MAGIC_LINK_SECRET be van állítva, a 'key' paraméternek egyeznie kell.
+    """
+    # Kulcs ellenőrzés
+    if settings.magic_link_secret and key != settings.magic_link_secret:
+        logger.warning("Magic link: érvénytelen kulcs (email: %s)", email)
+        raise HTTPException(status_code=403, detail="Érvénytelen kulcs")
+
+    if not settings.learnworlds_client_id or not settings.learnworlds_client_secret:
+        logger.error("Magic link: LEARNWORLDS_CLIENT_ID vagy LEARNWORLDS_CLIENT_SECRET nincs beállítva")
+        raise HTTPException(status_code=503, detail="SSO nincs konfigurálva")
+
+    # LearnWorlds user ID keresés email alapján
+    try:
+        lw_user_id = await lw_client.get_user_id_by_email(email)
+    except Exception as exc:
+        logger.exception("Magic link: LearnWorlds user keresés hiba (email: %s): %s", email, exc)
+        raise HTTPException(status_code=502, detail="LearnWorlds API hiba") from exc
+
+    if not lw_user_id:
+        logger.warning("Magic link: user nem található (email: %s)", email)
+        raise HTTPException(status_code=404, detail="Felhasználó nem található")
+
+    # SSO link generálás
+    try:
+        sso_link = await lw_client.get_sso_link(lw_user_id)
+    except Exception as exc:
+        logger.exception("Magic link: SSO link generálás hiba (user: %s): %s", lw_user_id, exc)
+        raise HTTPException(status_code=502, detail="SSO link generálás sikertelen") from exc
+
+    logger.info("Magic link redirect: email=%s lw_user=%s", email, lw_user_id)
+    return RedirectResponse(url=sso_link, status_code=302)
 
 
 # ---------------------------------------------------------------------------

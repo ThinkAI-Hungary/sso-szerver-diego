@@ -73,3 +73,53 @@ class LearnWorldsClient:
         resp.raise_for_status()
         logger.info("LearnWorlds user %s frissitve: %s", user_id, list(fields.keys()))
         return True
+
+    async def _get_oauth2_token(self) -> str:
+        """
+        OAuth2 client_credentials grant segitsegevel kap egy admin access tokent.
+        Ez szukseges a SSO link generáláshoz.
+        """
+        url = f"https://{settings.learnworlds_school}/admin/api/oauth2/access_token"
+        data = {
+            "client_id": settings.learnworlds_client_id,
+            "client_secret": settings.learnworlds_client_secret,
+            "grant_type": "client_credentials",
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, data=data)
+
+        resp.raise_for_status()
+        token: str = resp.json()["access_token"]
+        return token
+
+    async def get_sso_link(self, user_id: str, redirect_url: str | None = None) -> str:
+        """
+        Egyszeri SSO belépési linket generál a megadott LearnWorlds user ID-hoz.
+        A link megnyitásával a user automatikusan be van lépve.
+        """
+        token = await self._get_oauth2_token()
+        url = f"{LW_API_BASE}/v{LW_API_VERSION}/users/{user_id}/sso"
+        params: dict[str, str] = {}
+        if redirect_url:
+            params["redirectUrl"] = redirect_url
+
+        headers = {
+            "Lw-Client": settings.learnworlds_school,
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, headers=headers, params=params)
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        # LearnWorlds kulonbozo mezokben adhatja vissza a linket
+        sso_link = data.get("sso_link") or data.get("url") or data.get("link") or data.get("redirectUrl")
+        if not sso_link:
+            logger.error("LearnWorlds SSO valasz nem tartalmaz linket: %s", data)
+            raise ValueError(f"SSO link nem talalhato a valaszban: {data}")
+
+        logger.info("SSO link generálva user %s-hez", user_id)
+        return sso_link
