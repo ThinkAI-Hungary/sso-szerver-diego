@@ -19,7 +19,7 @@ class LearnWorldsClient:
 
     def __init__(self) -> None:
         self._headers = {
-            "Lw-Client": settings.learnworlds_school,
+            "Lw-Client": settings.learnworlds_client_id,
             "Authorization": f"Bearer {settings.learnworlds_api_key}",
             "Content-Type": "application/json",
         }
@@ -39,7 +39,13 @@ class LearnWorldsClient:
             logger.warning("LearnWorlds: user nem talalhato (email: %s)", email)
             return None
 
-        resp.raise_for_status()
+        if not resp.is_success:
+            logger.error(
+                "LearnWorlds API hiba: status=%s body=%s",
+                resp.status_code, resp.text[:500]
+            )
+            resp.raise_for_status()
+
         data = resp.json()
         users = data.get("data", [])
         if not users:
