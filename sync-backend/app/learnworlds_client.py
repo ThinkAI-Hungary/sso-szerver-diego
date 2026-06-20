@@ -7,8 +7,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-LW_API_BASE = "https://api.learnworlds.com"
 LW_API_VERSION = "2"
+
+
+def _api_base() -> str:
+    """A school saját API base URL-je."""
+    return f"https://{settings.learnworlds_school}/admin/api"
 
 
 class LearnWorldsClient:
@@ -29,7 +33,7 @@ class LearnWorldsClient:
         Email cim alapjan megkeresi a LearnWorlds user ID-t.
         Ha a user nem talalhato, None-t ad vissza.
         """
-        url = f"{LW_API_BASE}/v{LW_API_VERSION}/users"
+        url = f"{_api_base()}/v{LW_API_VERSION}/users"
         params = {"email": email}
 
         async with httpx.AsyncClient() as client:
@@ -66,7 +70,7 @@ class LearnWorldsClient:
             logger.info("Nincsenek frissitendo mezok, kihagyva.")
             return True
 
-        url = f"{LW_API_BASE}/v{LW_API_VERSION}/users/{user_id}"
+        url = f"{_api_base()}/v{LW_API_VERSION}/users/{user_id}"
         payload = {"fields": fields}
 
         async with httpx.AsyncClient() as client:
@@ -104,7 +108,7 @@ class LearnWorldsClient:
         A link megnyitásával a user automatikusan be van lépve.
         """
         token = await self._get_oauth2_token()
-        url = f"{LW_API_BASE}/v{LW_API_VERSION}/users/{user_id}/sso"
+        url = f"{_api_base()}/v{LW_API_VERSION}/users/{user_id}/sso"
         params: dict[str, str] = {}
         if redirect_url:
             params["redirectUrl"] = redirect_url
