@@ -1,4 +1,4 @@
-﻿# Diego Academy SSO – Mi nem ment és miért
+# Diego Academy SSO – Mi nem ment és miért
 
 **Készítés dátuma:** 2026-06-25
 **Alapja:** learnworlds_keycloak_sso_osszefoglalo.md + 2026-06-25 session logok
@@ -258,3 +258,85 @@ A LW mobile app WebView-ja szigetelt – nem kommunikál a rendszer böngészőv
 - Az auto-redirect valódi tesztelése (Railway deploy után)
 - Ha nem megy: visszaállás `add63d3` commitra és onnan indulni
 - LW_WEBHOOK_SECRET beállítása Railway-en (jelenleg üres)
+
+---
+
+## 14. Security fix: userek látják egymás emailjét (2026-06-26, commit 2dd8a08)
+
+### Mi volt a probléma
+- A `_recent_lw_logins` egy **globális, közös** in-memory dictionary
+- Amikor User A belépett (webhook jött), és User B megnyitotta `/lw-login`-t, a rendszer `fresh[0]`-t vette = **User A emailje**
+- User B így User A fiókjával lépett volna be → **biztonsági bug**
+- Az email beviteli form is probléma: bárki beírhatja más emailjét → magic link generálódik rá
+
+### Mi lett törölve
+- **Email beviteli form** (`<form>` + `<input type="email">`) → senki nem írhat be más emailjét
+- **Webhook-alapú auto-redirect** (a `fresh[0]` bug) → senki nem látja más emailjét
+- **POST `/lw-login`** endpoint (email form submit)
+- **POST `/lw-login/confirm`** endpoint (megerősítő oldal)
+- **`email_param` és `_get_recent_emails()` használat** a `/lw-login` GET handlerből
+
+### Mi lett hozzáadva/módosítva
+- **`/lw-login` oldal**: ha van cookie → auto magic link redirect; ha nincs → "Belépés" gomb → `/sso/start`
+- **`/sso/callback`**: Keycloak OIDC auth után **cookie beállítás** (1 éves `lw_email`) + magic link + `/profile` redirect
+- **`/sso/callback` hibakezelés**: `raise HTTPException` helyett `RedirectResponse` → felhasználóbarát hibaoldal
+- **`/lw-logout`** GET endpoint: cookie törlés, redirect `/lw-login?force=1`
+- **Keycloak `sync-backend` client**: Standard Flow bekapcsolva, redirect URI beállítva
+
+### Új flow
+1. User megnyitja `/lw-login`
+2. Ha van `lw_email` cookie (és nincs `?force=1`) → automatikus magic link redirect
+3. Ha nincs cookie → "Belépés" gomb megjelenik
+4. Gomb kattintás → `/sso/start` → Keycloak login oldal (diego realm)
+5. Keycloak auth sikeres → `/sso/callback` → ID tokenből email kiolvasás (hamisíthatatlan)
+6. Cookie beállítás + LW magic link generálás → redirect LW `/profile` oldalra
+7. Következő alkalommal a cookie már megvan → automatikus (2. pont)
+
+### Keycloak konfiguráció (sync-backend client, diego realm)
+- **Client type**: Confidential (client_id + client_secret)
+- **Standard Flow**: ON (bekapcsolva 2026-06-26)
+- **Valid Redirect URI**: `https://sso-szerver-diego-production.up.railway.app/sso/callback`
+- **Web Origins**: `https://sso-szerver-diego-production.up.railway.app`
+- **Service Account**: marad (webhook sync-hez kell)
+
+---
+
+## 15. Jelenlegi állapot (2026-06-26, commit 2dd8a08)
+
+### Ami MŰKÖDIK
+- Cookie-alapú auto-login visszatérő usereknél (1 éves cookie)
+- Rate limiting: 5 perc cooldown per email (magic link spam védelem)
+- Cooldown oldal megjelenik ha túl gyakran kér linket
+- `/magic-link` endpoint (LW API-n keresztüli SSO link generálás)
+- `/lw-logout` endpoint (cookie törlés)
+- Keycloak OIDC konfiguráció (Standard Flow, redirect URI) – **beállítva, de end-to-end NEM tesztelve**
+- Lapozásos LW user lookup (page_size=200)
+- `/webhook/lw-login` webhook fogadás (megmaradt, de a login flow NEM függ tőle)
+- `/webhook/keycloak` profil szinkronizáció (kód kész, nem tesztelve)
+
+### Ami MÉG NEM TESZTELVE
+1. **Keycloak OIDC end-to-end flow**: `/sso/start` → Keycloak login → `/sso/callback` → magic link
+   - A `sync-backend` client Standard Flow be van kapcsolva
+   - De nem volt még valódi user login teszt ezen a flow-n
+   - Lehetséges problémák: Keycloak realm nincs user, client scope hiányzik, stb.
+2. **Mobilos tesztelés**: a böngészős flow mobil eszközön
+
+### Ami MÉG HIÁNYZIK
+1. **Keycloak OIDC teszt** – valódi user login a diego realm-ben a `/sso/start` flow-n keresztül
+2. **Diego realm user létrehozás** – ha nincs teszt user a Keycloakban
+3. **LW Custom HTML gomb frissítés** – az `/megnyitas` oldalon a gomb most `/lw-login?email=X`-re mutat, de az email param kezelés törölve lett; a gomb egyszerűen `/lw-login`-re mutathat (cookie-t vagy Keycloak logint használ)
+4. **LW Automation**: nem szükséges a login flow-hoz (csak profil sync-hez), de ha marad, a webhook secret beállítandó
+5. **In-memory store migrálás**: `_recent_lw_logins` és `_magic_link_cooldowns` Railway restart-kor elvesznek; ha fontos, Redis/DB kell
+
+### Fájlok állapota
+- `sync-backend/app/main.py` – frissítve (commit 2dd8a08)
+- `sync-backend/app/config.py` – változatlan
+- `sync-backend/app/learnworlds_client.py` – változatlan
+- `sync-backend/app/keycloak_client.py` – változatlan
+- Keycloak admin (Railway) – `sync-backend` client frissítve
+
+### Következő lépések (prioritás sorrendben)
+1. **Keycloak teszt user**: diego realm-ben user létrehozás (ha nincs)
+2. **End-to-end OIDC teszt**: böngészőben `/lw-login` megnyitás → "Belépés" → Keycloak login → magic link → LW profile
+3. **LW oldal gomb frissítés**: `/megnyitas` oldalon a Custom HTML gomb URL-jét `/lw-login`-re cserélni
+4. **Mobilos teszt**: a teljes flow mobil böngészőből
