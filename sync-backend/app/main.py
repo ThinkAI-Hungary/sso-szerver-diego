@@ -528,11 +528,12 @@ async def lw_login_webhook(request: Request) -> dict:
     Védelem: ha LW_WEBHOOK_SECRET be van állítva, az X-LW-Webhook-Secret
     headernek egyeznie kell (megakadályozza az álwebhook-okat).
     """
-    # Webhook titkos kulcs ellenőrzés
+    # Webhook titkos kulcs ellenőrzés (Bearer Token)
     if settings.lw_webhook_secret:
-        incoming = request.headers.get("X-LW-Webhook-Secret", "")
-        if not hmac_lib.compare_digest(incoming, settings.lw_webhook_secret):
-            logger.warning("LW webhook: érvénytelen vagy hiányzó X-LW-Webhook-Secret header")
+        auth_header = request.headers.get("Authorization", "")
+        expected = f"Bearer {settings.lw_webhook_secret}"
+        if not hmac_lib.compare_digest(auth_header, expected):
+            logger.warning("LW webhook: érvénytelen Authorization header")
             raise HTTPException(status_code=403, detail="Érvénytelen webhook titkos kulcs")
     else:
         logger.warning("LW webhook: LW_WEBHOOK_SECRET nincs beállítva – bárki tud webhookot küldeni!")
