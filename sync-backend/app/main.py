@@ -571,7 +571,9 @@ async def lw_login_page(request: Request) -> Response:
     email_param = request.query_params.get("email", "").strip()
 
     # 1. Cookie alapú auto-redirect (visszatérő user)
-    if lw_email and not force:
+    # Ha van ?email=X param ÉS eltér a cookie-tól → a param prioritást kap (user váltás)
+    cookie_matches = (not email_param) or (email_param.lower() == (lw_email or "").lower())
+    if lw_email and not force and cookie_matches:
         logger.info("LW Login: cookie-ból auto-redirect (email: %s)", lw_email)
         return RedirectResponse(
             url=f"/magic-link?email={urllib.parse.quote(lw_email)}&key={settings.magic_link_secret}",
