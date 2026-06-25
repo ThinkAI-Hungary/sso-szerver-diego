@@ -129,7 +129,7 @@ class LearnWorldsClient:
         }
 
         async with httpx.AsyncClient() as client:
-            resp = await client.post(url, headers=headers, json=body)
+            resp = await client.post(url, headers=self._headers, json=body)
 
         logger.info(
             "LearnWorlds magic-link endpoint valasz: status=%s body=%s",
