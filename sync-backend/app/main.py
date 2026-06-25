@@ -148,10 +148,10 @@ async def sso_start() -> RedirectResponse:
 
 
 @app.get("/sso/callback", tags=["sso"])
-async def sso_callback(code: str, state: str) -> RedirectResponse:
+async def sso_callback(code: str, state: str) -> Response:
     """
     Keycloak OIDC callback. Kicseréli a kódot tokenre, lekéri az emailt,
-    majd LearnWorlds magic linket generál és átirányít.
+    majd cookie-t állít be és LearnWorlds magic linket generál.
     """
     if state not in _oidc_states:
         raise HTTPException(status_code=400, detail="Érvénytelen OIDC state (CSRF?)")
@@ -179,24 +179,27 @@ async def sso_callback(code: str, state: str) -> RedirectResponse:
 
     if not resp.is_success:
         logger.error("SSO callback: Keycloak token csere sikertelen: %s", resp.text[:300])
-        raise HTTPException(status_code=502, detail="Keycloak token csere sikertelen")
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
     token_data = resp.json()
     id_token = token_data.get("id_token", "")
     if not id_token:
-        raise HTTPException(status_code=502, detail="id_token hiányzik a válaszból")
+        logger.error("SSO callback: id_token hiányzik a válaszból")
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
     # JWT payload dekodálás (nincs verificáció - a Keycloak-tól közvetlenül kaptuk)
     try:
         payload_b64 = id_token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         claims = json.loads(base64.b64decode(payload_b64))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="JWT dekodálás sikertelen") from exc
+    except Exception:
+        logger.error("SSO callback: JWT dekodálás sikertelen")
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
     email = claims.get("email", "").strip()
     if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Email nem található a Keycloak tokenben")
+        logger.error("SSO callback: email nem található a Keycloak tokenben")
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
     logger.info("SSO callback: Keycloak auth sikeres, email: %s", email)
 
@@ -204,19 +207,34 @@ async def sso_callback(code: str, state: str) -> RedirectResponse:
     try:
         lw_user_id = await lw_client.get_user_id_by_email(email)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="LearnWorlds API hiba") from exc
+        logger.exception("SSO callback: LearnWorlds API hiba: %s", exc)
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
     if not lw_user_id:
-        raise HTTPException(status_code=404, detail=f"LearnWorlds user nem található: {email}")
+        logger.warning("SSO callback: LW user nem található: %s", email)
+        return RedirectResponse(url="/lw-login?error=not_found&force=1", status_code=302)
 
-    # LW magic link genérálás
+    # LW magic link generálás + cookie beállítás
     try:
-        sso_link = await lw_client.get_sso_link(lw_user_id)
+        redirect_to = f"https://{settings.learnworlds_school}/profile"
+        sso_link = await lw_client.get_sso_link(lw_user_id, redirect_url=redirect_to)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="SSO link generálás sikertelen") from exc
+        logger.exception("SSO callback: SSO link generálás hiba: %s", exc)
+        return RedirectResponse(url="/lw-login?error=keycloak&force=1", status_code=302)
 
-    logger.info("SSO callback: LW magic link redirect, email=%s user=%s", email, lw_user_id)
-    return RedirectResponse(url=sso_link, status_code=302)
+    _magic_link_cooldowns[email.lower()] = datetime.now(timezone.utc)
+
+    response = RedirectResponse(url=sso_link, status_code=302)
+    response.set_cookie(
+        key="lw_email",
+        value=_sign_email(email),
+        max_age=365 * 24 * 60 * 60,  # 1 év
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    logger.info("SSO callback: LW magic link + cookie beállítva, email=%s user=%s", email, lw_user_id)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +360,24 @@ _LW_LOGIN_HTML = """
     }
     button:hover { background: #c1121f; }
     button:active { transform: scale(.98); }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 13px;
+      background: #e63946;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+      transition: background .2s, transform .1s;
+    }
+    .btn:hover { background: #c1121f; }
+    .btn:active { transform: scale(.98); }
     .error {
       background: #fff0f0;
       color: #c1121f;
@@ -361,15 +397,10 @@ _LW_LOGIN_HTML = """
 <body>
   <div class="card">
     <div class="logo">DIEGO<span> ACADEMY</span></div>
-    <p class="subtitle">Add meg az email cíedet a böngészős belépéshez</p>
+    <p class="subtitle">Belépés a böngészős felületre</p>
     {error}
-    <form method="POST" action="/lw-login">
-      <label for="email">Email cím</label>
-      <input type="email" id="email" name="email" placeholder="pelda@email.com"
-             value="{prefill}" required autofocus>
-      <button type="submit">Belépés</button>
-    </form>
-    <p class="note">Az email cíedet megjegyezzük a böngészőben – legközelebb automatikusan lépsz be.</p>
+    <a href="/sso/start" class="btn">Belépés</a>
+    <p class="note">A bejelentkezés után automatikusan átirányítunk a Diego Academy-be.</p>
   </div>
 </body>
 </html>
@@ -560,169 +591,52 @@ async def lw_login_page(request: Request) -> Response:
     """
     Böngészős belépési oldal.
 
-    Prioritási sorrend:
+    Flow:
     1. Ha lw_email cookie van (és nincs force) → magic link redirect (visszatérő user)
-    2. Ha ?email=X param van ÉS friss webhook létezik → rate limit ellenőrzés → magic link + cookie beállítás
-    3. Ha ?email=X van de nincs friss webhook → hiba oldal
-    4. Ha van friss webhook (nincs email param) → megerősítő oldal
-    5. Különben → email beviteli form
+    2. Ha nincs cookie → "Belépés" gomb → /sso/start → Keycloak login → cookie beállítás
     """
     lw_email = _verify_signed_email(request.cookies.get("lw_email", ""))
     force = request.query_params.get("force") == "1"
-    email_param = request.query_params.get("email", "").strip()
 
     # 1. Cookie alapú auto-redirect (visszatérő user)
-    # Ha van ?email=X param ÉS eltér a cookie-tól → a param prioritást kap (user váltás)
-    cookie_matches = (not email_param) or (email_param.lower() == (lw_email or "").lower())
-    if lw_email and not force and cookie_matches:
+    if lw_email and not force:
+        # Rate limit ellenőrzés
+        cooldown_key = lw_email.lower()
+        if cooldown_key in _magic_link_cooldowns:
+            elapsed = (datetime.now(timezone.utc) - _magic_link_cooldowns[cooldown_key]).total_seconds() / 60
+            if elapsed < _MAGIC_LINK_COOLDOWN_MINUTES:
+                remaining = int(_MAGIC_LINK_COOLDOWN_MINUTES - elapsed) + 1
+                logger.info("LW Login: cooldown aktív (email: %s, %d perc múlva újrakérhető)", lw_email, remaining)
+                html = _LW_COOLDOWN_HTML.replace("{minutes}", str(remaining)).replace(
+                    "{lw_url}", f"https://{settings.learnworlds_school}"
+                )
+                return HTMLResponse(content=html)
+
+        _magic_link_cooldowns[cooldown_key] = datetime.now(timezone.utc)
         logger.info("LW Login: cookie-ból auto-redirect (email: %s)", lw_email)
         return RedirectResponse(
             url=f"/magic-link?email={urllib.parse.quote(lw_email)}&key={settings.magic_link_secret}",
             status_code=302,
         )
 
-    # 2-3. Email param alapú belépés (LW oldalon lévő gombról érkezik, {user_email} változóval)
-    if email_param and "@" in email_param and not force:
-        recent = _get_recent_emails()
-        recent_lower = [e.lower() for e in recent]
+    # 2. Nincs cookie → Keycloak bejelentkezési oldal
+    error_param = request.query_params.get("error", "")
+    error_html = ""
+    if error_param == "not_found":
+        error_html = '<div class="error">A felhasználó nem található a Diego Academy rendszerben. Regisztrálj először az alkalmazásban.</div>'
+    elif error_param == "keycloak":
+        error_html = '<div class="error">A bejelentkezés sikertelen. Próbáld újra.</div>'
 
-        if email_param.lower() not in recent_lower:
-            # Nincs friss webhook → user nem lépett be LW-ben a közelmúltban
-            logger.warning("LW Login: nincs friss webhook email param alapú belépéshez: %s", email_param)
-            error_html = '<div class="error">Nem találtunk friss belépést. Lépj be a Diego Academy alkalmazásba, majd próbáld újra.</div>'
-            html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email_param)
-            return HTMLResponse(content=html, status_code=403)
-
-        # Rate limit ellenőrzés (spam védelem: max 1 link / 5 perc / email)
-        cooldown_key = email_param.lower()
-        if cooldown_key in _magic_link_cooldowns:
-            elapsed_minutes = (
-                datetime.now(timezone.utc) - _magic_link_cooldowns[cooldown_key]
-            ).total_seconds() / 60
-            if elapsed_minutes < _MAGIC_LINK_COOLDOWN_MINUTES:
-                remaining = int(_MAGIC_LINK_COOLDOWN_MINUTES - elapsed_minutes) + 1
-                logger.info("LW Login: cooldown aktív (email: %s, %d perc múlva újrakérhető)", email_param, remaining)
-                html = _LW_COOLDOWN_HTML.replace("{minutes}", str(remaining)).replace(
-                    "{lw_url}", f"https://{settings.learnworlds_school}"
-                )
-                return HTMLResponse(content=html)
-
-        # Magic link generálás + 1 éves cookie beállítás
-        _magic_link_cooldowns[cooldown_key] = datetime.now(timezone.utc)
-        logger.info("LW Login: gomb alapú belépés, magic link generálás (email: %s)", email_param)
-        response = RedirectResponse(
-            url=f"/magic-link?email={urllib.parse.quote(email_param)}&key={settings.magic_link_secret}",
-            status_code=302,
-        )
-        response.set_cookie(
-            key="lw_email",
-            value=_sign_email(email_param),
-            max_age=365 * 24 * 60 * 60,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-        )
-        return response
-
-    # 4. Friss webhook → automatikus redirect (3 perces ablak, nincs gombnyomás)
-    if not force:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
-        fresh = [e for e, t in _recent_lw_logins.items() if t >= cutoff]
-        if fresh:
-            email_auto = fresh[0]
-            cooldown_key = email_auto.lower()
-            if cooldown_key in _magic_link_cooldowns:
-                elapsed = (datetime.now(timezone.utc) - _magic_link_cooldowns[cooldown_key]).total_seconds() / 60
-                if elapsed < _MAGIC_LINK_COOLDOWN_MINUTES:
-                    remaining = int(_MAGIC_LINK_COOLDOWN_MINUTES - elapsed) + 1
-                    html = _LW_COOLDOWN_HTML.replace("{minutes}", str(remaining)).replace(
-                        "{lw_url}", f"https://{settings.learnworlds_school}"
-                    )
-                    return HTMLResponse(content=html)
-            _magic_link_cooldowns[cooldown_key] = datetime.now(timezone.utc)
-            logger.info("LW Login: auto-redirect webhook alapján (email: %s)", email_auto)
-            response = RedirectResponse(
-                url=f"/magic-link?email={urllib.parse.quote(email_auto)}&key={settings.magic_link_secret}",
-                status_code=302,
-            )
-            response.set_cookie(
-                key="lw_email",
-                value=_sign_email(email_auto),
-                max_age=365 * 24 * 60 * 60,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-            )
-            return response
-
-    # 5. Email beviteli form
-    html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
+    html = _LW_LOGIN_HTML.replace("{error}", error_html)
     return HTMLResponse(content=html)
 
 
-@app.post("/lw-login", tags=["sso"])
-async def lw_login_submit(request: Request) -> Response:
-    """
-    Email form submit: cookie-t állít be, majd magic linket generál.
-    """
-    form = await request.form()
-    email = str(form.get("email", "")).strip()
-
-    if not email or "@" not in email:
-        error_html = '<div class="error">Kérjük, adjon meg érvényes email címet.</div>'
-        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
-        return HTMLResponse(content=html, status_code=400)
-
-    # Ellenőrzés: volt-e friss LW bejelentkezés ehhez az emailhez?
-    recent = _get_recent_emails()
-    if email not in recent:
-        logger.warning("LW Login: nincs friss webhook ehhez az emailhez: %s", email)
-        error_html = '<div class="error">Nem találtunk friss bejelentkezést ehhez az emailhez. Kérjük, nyisd meg a Diego Academy alkalmazást és lépj be ott először.</div>'
-        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
-        return HTMLResponse(content=html, status_code=403)
-
-    response = RedirectResponse(
-        url=f"/magic-link?email={email}&key={settings.magic_link_secret}",
-        status_code=302,
-    )
-    response.set_cookie(
-        key="lw_email",
-        value=_sign_email(email),
-        max_age=365 * 24 * 60 * 60,  # 1 év
-        httponly=True,
-        secure=True,
-        samesite="lax",
-    )
-    return response
-
-
-@app.post("/lw-login/confirm", tags=["sso"])
-async def lw_login_confirm(request: Request) -> Response:
-    """
-    Egy gombnyomásos megerősítés a friss webhook-alapu bejelentkezéshez.
-    """
-    form = await request.form()
-    email = str(form.get("email", "")).strip()
-
-    recent = _get_recent_emails()
-    if email not in recent:
-        error_html = '<div class="error">Ez az email nem szerepel a friss belépések között. Próbáld újra az appból.</div>'
-        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", "")
-        return HTMLResponse(content=html, status_code=403)
-
-    response = RedirectResponse(
-        url=f"/magic-link?email={email}&key={settings.magic_link_secret}",
-        status_code=302,
-    )
-    response.set_cookie(
-        key="lw_email",
-        value=_sign_email(email),
-        max_age=365 * 24 * 60 * 60,  # 1 év
-        httponly=True,
-        secure=True,
-        samesite="lax",
-    )
-    logger.info("LW Login: megerősített belépés, cookie beállítva (email: %s)", email)
+@app.get("/lw-logout", tags=["sso"])
+async def lw_logout() -> Response:
+    """Cookie törlése – kijelentkezés a böngészős belépésből."""
+    response = RedirectResponse(url="/lw-login?force=1", status_code=302)
+    response.delete_cookie(key="lw_email")
+    logger.info("LW Logout: cookie törölve")
     return response
 
 
