@@ -36,16 +36,25 @@ lw_client = LearnWorldsClient()
 _recent_lw_logins: dict[str, datetime] = {}
 _LOGIN_TTL_MINUTES = 30
 
+# Rate limiting: magic link generáláshoz (gomb spam védelem)
+_magic_link_cooldowns: dict[str, datetime] = {}
+_MAGIC_LINK_COOLDOWN_MINUTES = 5
+
 # OIDC state store (CSRF védelem)
 _oidc_states: dict[str, str] = {}  # state -> ""
 
 
 def _cleanup_logins() -> None:
-    """Lejárt bejelentkezések törlése."""
+    """Lejárt bejelentkezések és magic link cooldownok törlése."""
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=_LOGIN_TTL_MINUTES)
     expired = [e for e, t in _recent_lw_logins.items() if t < cutoff]
     for e in expired:
         del _recent_lw_logins[e]
+
+    cooldown_cutoff = datetime.now(timezone.utc) - timedelta(minutes=_MAGIC_LINK_COOLDOWN_MINUTES)
+    expired_cooldowns = [e for e, t in _magic_link_cooldowns.items() if t < cooldown_cutoff]
+    for e in expired_cooldowns:
+        del _magic_link_cooldowns[e]
 
 
 def _get_recent_emails() -> list[str]:
@@ -223,14 +232,15 @@ async def magic_link(email: str, key: str | None = None) -> RedirectResponse:
         logger.warning("Magic link: user nem található (email: %s)", email)
         raise HTTPException(status_code=404, detail="Felhasználó nem található")
 
-    # SSO link generálás
+    # SSO link generálás – belépés után /profile oldalra irányít
     try:
-        sso_link = await lw_client.get_sso_link(lw_user_id)
+        redirect_to = f"https://{settings.learnworlds_school}/profile"
+        sso_link = await lw_client.get_sso_link(lw_user_id, redirect_url=redirect_to)
     except Exception as exc:
         logger.exception("Magic link: SSO link generálás hiba (user: %s): %s", lw_user_id, exc)
         raise HTTPException(status_code=502, detail="SSO link generálás sikertelen") from exc
 
-    logger.info("Magic link redirect: email=%s lw_user=%s", email, lw_user_id)
+    logger.info("Magic link redirect: email=%s lw_user=%s -> /profile", email, lw_user_id)
     return RedirectResponse(url=sso_link, status_code=302)
 
 
@@ -425,6 +435,67 @@ _LW_CONFIRM_HTML = """
 </html>
 """
 
+_LW_COOLDOWN_HTML = """
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diego Academy – Belépési link</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.12);
+      padding: 40px 36px;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .logo { font-size: 28px; font-weight: 700; color: #e63946; letter-spacing: -1px; margin-bottom: 8px; }
+    .logo span { color: #111; }
+    .icon { font-size: 44px; margin: 16px 0; }
+    .title { font-size: 18px; font-weight: 600; color: #111; margin-bottom: 12px; }
+    .message { color: #666; font-size: 14px; line-height: 1.6; margin-bottom: 28px; }
+    .btn {
+      display: inline-block;
+      padding: 13px 24px;
+      background: #e63946;
+      color: #fff;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      text-decoration: none;
+      transition: background .2s;
+    }
+    .btn:hover { background: #c1121f; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">DIEGO<span> ACADEMY</span></div>
+    <div class="icon">&#9200;</div>
+    <p class="title">Belépési link aktív</p>
+    <p class="message">Az előző belépési link még érvényes.<br>Kérj újat <strong>{minutes} perc</strong> múlva.</p>
+    <a href="{lw_url}" class="btn">Vissza a Diego Academybe</a>
+  </div>
+</body>
+</html>
+"""
+
 
 # ---------------------------------------------------------------------------
 # LW Webhook: user login event (automation-ból)
@@ -457,20 +528,70 @@ async def lw_login_webhook(request: Request) -> dict:
 async def lw_login_page(request: Request) -> Response:
     """
     Böngészős belépési oldal.
-    Ha az email cookie már be van állítva, automatikusan generál magic linket.
-    Ha van friss LW bejelentkezés (webhook), megmutatja az email-t megerősítésre.
-    Ha nincs, email beviteli formot jelenít meg.
+
+    Prioritási sorrend:
+    1. Ha lw_email cookie van (és nincs force) → magic link redirect (visszatérő user)
+    2. Ha ?email=X param van ÉS friss webhook létezik → rate limit ellenőrzés → magic link + cookie beállítás
+    3. Ha ?email=X van de nincs friss webhook → hiba oldal
+    4. Ha van friss webhook (nincs email param) → megerősítő oldal
+    5. Különben → email beviteli form
     """
     lw_email = request.cookies.get("lw_email")
     force = request.query_params.get("force") == "1"
+    email_param = request.query_params.get("email", "").strip()
 
+    # 1. Cookie alapú auto-redirect (visszatérő user)
     if lw_email and not force:
         logger.info("LW Login: cookie-ból auto-redirect (email: %s)", lw_email)
         return RedirectResponse(
-            url=f"/magic-link?email={lw_email}&key={settings.magic_link_secret}",
+            url=f"/magic-link?email={urllib.parse.quote(lw_email)}&key={settings.magic_link_secret}",
             status_code=302,
         )
 
+    # 2-3. Email param alapú belépés (LW oldalon lévő gombról érkezik, {user_email} változóval)
+    if email_param and "@" in email_param and not force:
+        recent = _get_recent_emails()
+        recent_lower = [e.lower() for e in recent]
+
+        if email_param.lower() not in recent_lower:
+            # Nincs friss webhook → user nem lépett be LW-ben a közelmúltban
+            logger.warning("LW Login: nincs friss webhook email param alapú belépéshez: %s", email_param)
+            error_html = '<div class="error">Nem találtunk friss belépést. Lépj be a Diego Academy alkalmazásba, majd próbáld újra.</div>'
+            html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email_param)
+            return HTMLResponse(content=html, status_code=403)
+
+        # Rate limit ellenőrzés (spam védelem: max 1 link / 5 perc / email)
+        cooldown_key = email_param.lower()
+        if cooldown_key in _magic_link_cooldowns:
+            elapsed_minutes = (
+                datetime.now(timezone.utc) - _magic_link_cooldowns[cooldown_key]
+            ).total_seconds() / 60
+            if elapsed_minutes < _MAGIC_LINK_COOLDOWN_MINUTES:
+                remaining = int(_MAGIC_LINK_COOLDOWN_MINUTES - elapsed_minutes) + 1
+                logger.info("LW Login: cooldown aktív (email: %s, %d perc múlva újrakérhető)", email_param, remaining)
+                html = _LW_COOLDOWN_HTML.replace("{minutes}", str(remaining)).replace(
+                    "{lw_url}", f"https://{settings.learnworlds_school}"
+                )
+                return HTMLResponse(content=html)
+
+        # Magic link generálás + 1 éves cookie beállítás
+        _magic_link_cooldowns[cooldown_key] = datetime.now(timezone.utc)
+        logger.info("LW Login: gomb alapú belépés, magic link generálás (email: %s)", email_param)
+        response = RedirectResponse(
+            url=f"/magic-link?email={urllib.parse.quote(email_param)}&key={settings.magic_link_secret}",
+            status_code=302,
+        )
+        response.set_cookie(
+            key="lw_email",
+            value=email_param,
+            max_age=365 * 24 * 60 * 60,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+        )
+        return response
+
+    # 4. Friss webhook van → megerősítő oldal (email megadása nélküli flow)
     if not force:
         recent = _get_recent_emails()
         if recent:
@@ -479,6 +600,7 @@ async def lw_login_page(request: Request) -> Response:
             logger.info("LW Login: friss belépés találva, megerősítés megmutatva (%s)", email_to_confirm)
             return HTMLResponse(content=html)
 
+    # 5. Email beviteli form
     html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
     return HTMLResponse(content=html)
 

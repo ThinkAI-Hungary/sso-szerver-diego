@@ -31,49 +31,36 @@ class LearnWorldsClient:
     async def get_user_id_by_email(self, email: str) -> str | None:
         """
         Email cim alapjan megkeresi a LearnWorlds user ID-t.
-        Ha a user nem talalhato, None-t ad vissza.
-        Figyelem: az API nem szur emailre, ezert lapoz es keres.
+        Az API tamogatja az email filter parametert (?email=X),
+        igy 1 API call elegendo. (Megerositest kapott session logokbol.)
         """
         url = f"{_api_base()}/v{LW_API_VERSION}/users"
-        page = 1
-        page_size = 50
+        params = {"email": email, "items_per_page": 10}
 
         async with httpx.AsyncClient() as client:
-            while True:
-                params = {"page": page, "items_per_page": page_size}
-                resp = await client.get(url, headers=self._headers, params=params)
+            resp = await client.get(url, headers=self._headers, params=params)
 
-                if resp.status_code == 404:
-                    logger.warning("LearnWorlds: user nem talalhato (email: %s)", email)
-                    return None
+        if resp.status_code == 404:
+            logger.warning("LearnWorlds: user nem talalhato (email: %s)", email)
+            return None
 
-                if not resp.is_success:
-                    logger.error(
-                        "LearnWorlds API hiba: status=%s body=%s",
-                        resp.status_code, resp.text[:500]
-                    )
-                    resp.raise_for_status()
+        if not resp.is_success:
+            logger.error(
+                "LearnWorlds API hiba: status=%s body=%s",
+                resp.status_code, resp.text[:500]
+            )
+            resp.raise_for_status()
 
-                data = resp.json()
-                users = data.get("data", [])
+        data = resp.json()
+        users = data.get("data", [])
+        matched = [u for u in users if u.get("email", "").lower() == email.lower()]
+        if matched:
+            user_id: str = matched[0]["id"]
+            logger.info("LearnWorlds user megtalaltva: %s -> %s", email, user_id)
+            return user_id
 
-                if not users:
-                    logger.warning("LearnWorlds: email nem talalhato (email: %s)", email)
-                    return None
-
-                # Az API nem szur emailre, ezert magunk keressuk
-                matched = [u for u in users if u.get("email", "").lower() == email.lower()]
-                if matched:
-                    user_id: str = matched[0]["id"]
-                    logger.info("LearnWorlds user megtalaltva: %s -> %s", email, user_id)
-                    return user_id
-
-                # Ha kevesebb user jott mint a lapret, elertuk a veget
-                if len(users) < page_size:
-                    logger.warning("LearnWorlds: email nem talalhato (email: %s)", email)
-                    return None
-
-                page += 1
+        logger.warning("LearnWorlds: email nem talalhato (email: %s)", email)
+        return None
 
     async def update_user_fields(self, user_id: str, fields: dict[str, Any]) -> bool:
         """
