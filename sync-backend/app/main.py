@@ -624,15 +624,36 @@ async def lw_login_page(request: Request) -> Response:
         )
         return response
 
-    # 4. Friss webhook → megerősítő oldal (3 perces ablak)
+    # 4. Friss webhook → automatikus redirect (3 perces ablak, nincs gombnyomás)
     if not force:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
         fresh = [e for e, t in _recent_lw_logins.items() if t >= cutoff]
         if fresh:
-            email_to_confirm = fresh[0]
-            html = _LW_CONFIRM_HTML.replace("{email}", email_to_confirm)
-            logger.info("LW Login: megerősítő oldal (%s)", email_to_confirm)
-            return HTMLResponse(content=html)
+            email_auto = fresh[0]
+            cooldown_key = email_auto.lower()
+            if cooldown_key in _magic_link_cooldowns:
+                elapsed = (datetime.now(timezone.utc) - _magic_link_cooldowns[cooldown_key]).total_seconds() / 60
+                if elapsed < _MAGIC_LINK_COOLDOWN_MINUTES:
+                    remaining = int(_MAGIC_LINK_COOLDOWN_MINUTES - elapsed) + 1
+                    html = _LW_COOLDOWN_HTML.replace("{minutes}", str(remaining)).replace(
+                        "{lw_url}", f"https://{settings.learnworlds_school}"
+                    )
+                    return HTMLResponse(content=html)
+            _magic_link_cooldowns[cooldown_key] = datetime.now(timezone.utc)
+            logger.info("LW Login: auto-redirect webhook alapján (email: %s)", email_auto)
+            response = RedirectResponse(
+                url=f"/magic-link?email={urllib.parse.quote(email_auto)}&key={settings.magic_link_secret}",
+                status_code=302,
+            )
+            response.set_cookie(
+                key="lw_email",
+                value=_sign_email(email_auto),
+                max_age=365 * 24 * 60 * 60,
+                httponly=True,
+                secure=True,
+                samesite="lax",
+            )
+            return response
 
     # 5. Email beviteli form
     html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
