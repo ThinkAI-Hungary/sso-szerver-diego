@@ -158,3 +158,68 @@ A LW mobile app WebView-ja szigetelt – nem kommunikál a rendszer böngészőv
 3. **Keycloak scope teszt:** Csak `openid email profile` scope-pal teszt login futtatása
 4. **Keycloak webhook teszt:** Railway logban megnézni – érkezik-e webhook login után?
 5. **LW email filter visszarakása a kódba:** `/v2/users?email=X` – 1 API call, nem lapozás
+
+---
+
+## 8. LW API email filter (2026-06-25 este)
+
+### Mi nem ment
+- `GET /admin/api/v2/users?email=X` → 200 OK de **üres lista** minden emailre
+- `GET /admin/api/v2/users?email=X&items_per_page=10` → ugyanígy üres
+- **Következtetés:** Az LW API email filter paraméter megbízhatatlan – jogosultsági vagy API verziós probléma
+
+### Megoldás
+- Visszaállás lapozásos megkeresésre (`page=1..N, items_per_page=50`) – ez biztosan működik
+
+---
+
+## 9. LW page builder változók button URL-ben (2026-06-25 este)
+
+### Mi nem ment
+- `{{user.email}}` beírva a gomb link URL mezőjébe → LW NEM helyettesíti be
+- A szerver logban ez látszott: `GET /lw-login?email=%7B%7Buser.email%7D%7D` (literálisan jött át)
+- Az automation webhook body-ban (`{"email": "{{user.email}}"}`) IGEN működik, page builderben NEM
+
+### Megoldás
+- `localStorage.getItem('lw_email')` – LW maga tárolja el a bejelentkezett user emailjét localStorage-ban
+- Custom HTML blokk JS-sel olvassa ki és rakja bele a gomb URL-jébe
+
+---
+
+## 10. LW `window.LW` JavaScript objektum (2026-06-25 este)
+
+### Mi nem ment
+- `window.LW` → undefined (nem ez a neve)
+- `window.LW.user.email` → undefined
+- `window.LW.visitor.email` → undefined
+- `/api/v2/users/me` saját tokennel → `{"errors": [...], "success": false}`
+
+### Ami működik
+- `localStorage.getItem('lw_email')` → visszaadja a bejelentkezett user emailjét (pl. `diego.learning.2025@gmail.com`)
+- `getUserToken()` → Bearer tokent ad vissza (de nem JWT, email nem dekódolható belőle)
+
+---
+
+## 11. Admin fiók nem jelenik meg `/v2/users`-ban
+
+### Megfigyelés
+- `diego.learning.2025@gmail.com` az admin fiók → az LW API `/v2/users` listán NEM szerepel
+- Normál learner fióknál a lapozásos megkeresés MŰKÖDIK
+- **Tanulság:** A magic link flow csak learner fiókokra fog működni, admin fiókra nem
+
+---
+
+## 12. Jelenlegi működő állapot (2026-06-25 este)
+
+### Ami KÉSZ és MŰKÖDIK
+- Lapozásos user lookup learner fiókokra
+- `/webhook/lw-login` webhook fogadás → email tárolás 30 percre
+- Rate limiting: 5 perc cooldown per email
+- `/lw-login?email=X` confirm oldal + magic link generálás
+- Magic link → `/profile` redirect (nem főoldal)
+- 1 éves cookie visszatérő usernél
+
+### Ami MÉG HIÁNYZIK az éles deployhoz
+- LW Custom HTML gomb a `/megnyitas` oldalon (kész a kód, berakandó LW-be)
+- LW Automation konfig: "User signs in" → webhook (nem email)
+- Teszt valódi mobilról

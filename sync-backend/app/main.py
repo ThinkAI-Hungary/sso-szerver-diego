@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac as hmac_lib
 import json
 import logging
 import secrets
@@ -42,6 +44,36 @@ _MAGIC_LINK_COOLDOWN_MINUTES = 5
 
 # OIDC state store (CSRF védelem)
 _oidc_states: dict[str, str] = {}  # state -> ""
+
+
+# ---------------------------------------------------------------------------
+# Cookie signing (HMAC-SHA256) – védi az lw_email cookie-t a hamisítástól
+# ---------------------------------------------------------------------------
+def _sign_email(email: str) -> str:
+    """HMAC-SHA256 aláírással ellátja az emailt a cookie értékhez."""
+    if not settings.magic_link_secret:
+        return email  # fejlesztési mód: nincs aláírás
+    key = settings.magic_link_secret.encode()
+    sig = hmac_lib.new(key, email.lower().encode(), hashlib.sha256).hexdigest()[:24]
+    return f"{email}|{sig}"
+
+
+def _verify_signed_email(value: str) -> str | None:
+    """Ellenőrzi az aláírt cookie értékét. Hamisított vagy lejárt esetén None-t ad vissza."""
+    if not value:
+        return None
+    if not settings.magic_link_secret:
+        return value  # fejlesztési mód: nincs ellenőrzés
+    if "|" not in value:
+        logger.warning("Cookie: aláírás hiányzik, elvetés (value=%s)", value[:30])
+        return None
+    email, sig = value.rsplit("|", 1)
+    key = settings.magic_link_secret.encode()
+    expected = hmac_lib.new(key, email.lower().encode(), hashlib.sha256).hexdigest()[:24]
+    if hmac_lib.compare_digest(sig, expected):
+        return email
+    logger.warning("Cookie: érvénytelen aláírás, elvetés (email=%s)", email)
+    return None
 
 
 def _cleanup_logins() -> None:
@@ -506,7 +538,19 @@ async def lw_login_webhook(request: Request) -> dict:
     LearnWorlds automation webhook fogadása user bejelentkezéskor.
     A payload-ban lévő user.email-t eltárolja 30 percre.
     Az /lw-login oldal ezt használja az automatikus belépéshez.
+
+    Védelem: ha LW_WEBHOOK_SECRET be van állítva, az X-LW-Webhook-Secret
+    headernek egyeznie kell (megakadályozza az álwebhook-okat).
     """
+    # Webhook titkos kulcs ellenőrzés
+    if settings.lw_webhook_secret:
+        incoming = request.headers.get("X-LW-Webhook-Secret", "")
+        if not hmac_lib.compare_digest(incoming, settings.lw_webhook_secret):
+            logger.warning("LW webhook: érvénytelen vagy hiányzó X-LW-Webhook-Secret header")
+            raise HTTPException(status_code=403, detail="Érvénytelen webhook titkos kulcs")
+    else:
+        logger.warning("LW webhook: LW_WEBHOOK_SECRET nincs beállítva – bárki tud webhookot küldeni!")
+
     try:
         body = await request.json()
     except Exception:
@@ -536,7 +580,7 @@ async def lw_login_page(request: Request) -> Response:
     4. Ha van friss webhook (nincs email param) → megerősítő oldal
     5. Különben → email beviteli form
     """
-    lw_email = request.cookies.get("lw_email")
+    lw_email = _verify_signed_email(request.cookies.get("lw_email", ""))
     force = request.query_params.get("force") == "1"
     email_param = request.query_params.get("email", "").strip()
 
@@ -583,7 +627,7 @@ async def lw_login_page(request: Request) -> Response:
         )
         response.set_cookie(
             key="lw_email",
-            value=email_param,
+            value=_sign_email(email_param),
             max_age=365 * 24 * 60 * 60,
             httponly=True,
             secure=True,
@@ -632,13 +676,12 @@ async def lw_login_submit(request: Request) -> Response:
     )
     response.set_cookie(
         key="lw_email",
-        value=email,
+        value=_sign_email(email),
         max_age=365 * 24 * 60 * 60,  # 1 év
         httponly=True,
         secure=True,
         samesite="lax",
     )
-    logger.info("LW Login: webhook validált, cookie beállítva (email: %s)", email)
     return response
 
 
@@ -662,7 +705,7 @@ async def lw_login_confirm(request: Request) -> Response:
     )
     response.set_cookie(
         key="lw_email",
-        value=email,
+        value=_sign_email(email),
         max_age=365 * 24 * 60 * 60,  # 1 év
         httponly=True,
         secure=True,

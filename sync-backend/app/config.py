@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Webhook biztonsag
     webhook_secret: str = ""  # ugyanaz, mint KC WEBHOOK_HTTP_SHARED_SECRET
+    lw_webhook_secret: str = ""  # LW Automation webhook titkos kulcs (X-LW-Webhook-Secret header)
 
     # SSO callback URL (Railway public URL)
     sso_base_url: str = "https://sso-szerver-diego-production.up.railway.app"
