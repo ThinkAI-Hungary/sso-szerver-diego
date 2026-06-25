@@ -123,7 +123,7 @@ class LearnWorldsClient:
             params["redirectUrl"] = redirect_url
 
         headers = {
-            "Lw-Client": settings.learnworlds_school,
+            "Lw-Client": settings.learnworlds_client_id,
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
