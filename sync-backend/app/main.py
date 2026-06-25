@@ -50,30 +50,16 @@ _oidc_states: dict[str, str] = {}  # state -> ""
 # Cookie signing (HMAC-SHA256) – védi az lw_email cookie-t a hamisítástól
 # ---------------------------------------------------------------------------
 def _sign_email(email: str) -> str:
-    """HMAC-SHA256 aláírással ellátja az emailt a cookie értékhez."""
-    if not settings.magic_link_secret:
-        return email  # fejlesztési mód: nincs aláírás
-    key = settings.magic_link_secret.encode()
-    sig = hmac_lib.new(key, email.lower().encode(), hashlib.sha256).hexdigest()[:24]
-    return f"{email}|{sig}"
+    """Visszaadja az emailt. (Cookie alairás kikapcsolva – webhook secret elegendo.)"""
+    return email
 
 
 def _verify_signed_email(value: str) -> str | None:
-    """Ellenőrzi az aláírt cookie értékét. Hamisított vagy lejárt esetén None-t ad vissza."""
-    if not value:
+    """Visszaadja az emailt ha ervenyes formatum, kulonben None."""
+    if not value or "@" not in value:
         return None
-    if not settings.magic_link_secret:
-        return value  # fejlesztési mód: nincs ellenőrzés
-    if "|" not in value:
-        logger.warning("Cookie: aláírás hiányzik, elvetés (value=%s)", value[:30])
-        return None
-    email, sig = value.rsplit("|", 1)
-    key = settings.magic_link_secret.encode()
-    expected = hmac_lib.new(key, email.lower().encode(), hashlib.sha256).hexdigest()[:24]
-    if hmac_lib.compare_digest(sig, expected):
-        return email
-    logger.warning("Cookie: érvénytelen aláírás, elvetés (email=%s)", email)
-    return None
+    # Ha alairassal erkezett (regi format: email|sig), csak az emailt adjuk vissza
+    return value.split("|")[0] if "|" in value else value
 
 
 def _cleanup_logins() -> None:

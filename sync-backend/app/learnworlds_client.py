@@ -37,7 +37,7 @@ class LearnWorldsClient:
         """
         url = f"{_api_base()}/v{LW_API_VERSION}/users"
         page = 1
-        page_size = 50
+        page_size = 200
 
         async with httpx.AsyncClient() as client:
             while True:
