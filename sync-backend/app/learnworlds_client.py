@@ -129,7 +129,7 @@ class LearnWorldsClient:
         }
 
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=headers, params=params)
+            resp = await client.post(url, headers=headers, json=params if params else {})
 
         logger.info(
             "LearnWorlds SSO endpoint valasz: status=%s body=%s",
