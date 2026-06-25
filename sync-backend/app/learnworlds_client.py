@@ -113,14 +113,14 @@ class LearnWorldsClient:
 
     async def get_sso_link(self, user_id: str, redirect_url: str | None = None) -> str:
         """
-        Egyszeri SSO belépési linket generál a megadott LearnWorlds user ID-hoz.
+        Egyszeri magic link belépési linket generál a megadott LearnWorlds user ID-hoz.
         A link megnyitásával a user automatikusan be van lépve.
         """
         token = await self._get_oauth2_token()
-        url = f"{_api_base()}/v{LW_API_VERSION}/users/{user_id}/sso"
-        params: dict[str, str] = {}
+        url = f"{_api_base()}/v{LW_API_VERSION}/users/{user_id}/magic-link"
+        body: dict = {}
         if redirect_url:
-            params["redirectUrl"] = redirect_url
+            body["redirectUrl"] = redirect_url
 
         headers = {
             "Lw-Client": settings.learnworlds_school,
@@ -129,24 +129,31 @@ class LearnWorldsClient:
         }
 
         async with httpx.AsyncClient() as client:
-            resp = await client.post(url, headers=headers, json=params if params else {})
+            resp = await client.post(url, headers=headers, json=body)
 
         logger.info(
-            "LearnWorlds SSO endpoint valasz: status=%s body=%s",
+            "LearnWorlds magic-link endpoint valasz: status=%s body=%s",
             resp.status_code, resp.text[:500]
         )
         resp.raise_for_status()
 
         if not resp.text.strip():
-            raise ValueError("LearnWorlds SSO endpoint ures valaszt adott")
+            raise ValueError("LearnWorlds magic-link endpoint ures valaszt adott")
 
         data = resp.json()
 
         # LearnWorlds kulonbozo mezokben adhatja vissza a linket
-        sso_link = data.get("sso_link") or data.get("url") or data.get("link") or data.get("redirectUrl")
+        sso_link = (
+            data.get("magic_link")
+            or data.get("sso_link")
+            or data.get("url")
+            or data.get("link")
+            or data.get("redirectUrl")
+        )
         if not sso_link:
-            logger.error("LearnWorlds SSO valasz nem tartalmaz linket: %s", data)
-            raise ValueError(f"SSO link nem talalhato a valaszban: {data}")
+            logger.error("LearnWorlds magic-link valasz nem tartalmaz linket: %s", data)
+            raise ValueError(f"Magic link nem talalhato a valaszban: {data}")
 
-        logger.info("SSO link generálva user %s-hez", user_id)
+        logger.info("Magic link generálva user %s-hez", user_id)
         return sso_link
+
