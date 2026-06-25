@@ -624,8 +624,17 @@ async def lw_login_page(request: Request) -> Response:
         )
         return response
 
-    # 4. Email beviteli form (confirm oldal eltávolítva: globális recent store
-    #    miatt bárki más user emailjét mutathatná)
+    # 4. Friss webhook → megerősítő oldal (3 perces ablak)
+    if not force:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+        fresh = [e for e, t in _recent_lw_logins.items() if t >= cutoff]
+        if fresh:
+            email_to_confirm = fresh[0]
+            html = _LW_CONFIRM_HTML.replace("{email}", email_to_confirm)
+            logger.info("LW Login: megerősítő oldal (%s)", email_to_confirm)
+            return HTMLResponse(content=html)
+
+    # 5. Email beviteli form
     html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
     return HTMLResponse(content=html)
 
