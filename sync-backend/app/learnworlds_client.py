@@ -35,7 +35,7 @@ class LearnWorldsClient:
         igy 1 API call elegendo. (Megerositest kapott session logokbol.)
         """
         url = f"{_api_base()}/v{LW_API_VERSION}/users"
-        params = {"email": email, "items_per_page": 10}
+        params = {"email": email}
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, headers=self._headers, params=params)
