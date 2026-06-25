@@ -383,6 +383,14 @@ async def lw_login_submit(request: Request) -> Response:
         html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
         return HTMLResponse(content=html, status_code=400)
 
+    # Ellenőrzés: volt-e friss LW bejelentkezés ehhez az emailhez?
+    recent = _get_recent_emails()
+    if email not in recent:
+        logger.warning("LW Login: nincs friss webhook ehhez az emailhez: %s", email)
+        error_html = '<div class="error">Nem találtunk friss bejelentkezést ehhez az emailhez. Kérjük, nyisd meg a Diego Academy alkalmazást és lépj be ott először.</div>'
+        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
+        return HTMLResponse(content=html, status_code=403)
+
     response = RedirectResponse(
         url=f"/magic-link?email={email}&key={settings.magic_link_secret}",
         status_code=302,
@@ -395,7 +403,7 @@ async def lw_login_submit(request: Request) -> Response:
         secure=True,
         samesite="lax",
     )
-    logger.info("LW Login: email cookie beállítva és magic link redirect (email: %s)", email)
+    logger.info("LW Login: webhook validált, cookie beállítva (email: %s)", email)
     return response
 
 
