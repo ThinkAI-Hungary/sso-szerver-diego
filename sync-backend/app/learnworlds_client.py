@@ -98,8 +98,16 @@ class LearnWorldsClient:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, data=data)
 
+        logger.info(
+            "LearnWorlds OAuth2 token valasz: status=%s body=%s",
+            resp.status_code, resp.text[:500]
+        )
         resp.raise_for_status()
-        token: str = resp.json()["access_token"]
+        data_json = resp.json()
+        if "access_token" not in data_json:
+            logger.error("LearnWorlds OAuth2 valasz nem tartalmaz access_token-t: %s", data_json)
+            raise ValueError(f"access_token hianyzik a valaszbol: {data_json}")
+        token: str = data_json["access_token"]
         return token
 
     async def get_sso_link(self, user_id: str, redirect_url: str | None = None) -> str:
