@@ -131,7 +131,15 @@ class LearnWorldsClient:
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, headers=headers, params=params)
 
+        logger.info(
+            "LearnWorlds SSO endpoint valasz: status=%s body=%s",
+            resp.status_code, resp.text[:500]
+        )
         resp.raise_for_status()
+
+        if not resp.text.strip():
+            raise ValueError("LearnWorlds SSO endpoint ures valaszt adott")
+
         data = resp.json()
 
         # LearnWorlds kulonbozo mezokben adhatja vissza a linket
