@@ -1,5 +1,9 @@
+import base64
+import json
 import logging
+import secrets
 import sys
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -31,6 +35,9 @@ lw_client = LearnWorldsClient()
 # In-memory store: email -> bejelentkezés időpontja (UTC)
 _recent_lw_logins: dict[str, datetime] = {}
 _LOGIN_TTL_MINUTES = 30
+
+# OIDC state store (CSRF védelem)
+_oidc_states: dict[str, str] = {}  # state -> ""
 
 
 def _cleanup_logins() -> None:
@@ -77,6 +84,112 @@ app = FastAPI(
 @app.get("/health", tags=["system"])
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Keycloak OIDC SSO (Keycloak -> LearnWorlds web school)
+# ---------------------------------------------------------------------------
+@app.get("/sso/start", tags=["sso"])
+async def sso_start() -> RedirectResponse:
+    """
+    Elindítja a Keycloak OIDC bejelentkezést.
+    A Keycloak visszairányít /sso/callback-re, ahol LW magic linket generálunk.
+    """
+    if not settings.keycloak_base_url or not settings.keycloak_client_id:
+        raise HTTPException(status_code=503, detail="Keycloak nincs konfigurálva")
+
+    state = secrets.token_urlsafe(32)
+    _oidc_states[state] = ""
+
+    auth_url = (
+        f"{settings.keycloak_base_url.rstrip('/')}"
+        f"/realms/{settings.keycloak_realm}"
+        "/protocol/openid-connect/auth"
+    )
+    redirect_uri = f"{settings.sso_base_url}/sso/callback"
+
+    params = {
+        "client_id": settings.keycloak_client_id,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+
+    logger.info("SSO start: Keycloak OIDC flow indul")
+    return RedirectResponse(url=f"{auth_url}?{urllib.parse.urlencode(params)}")
+
+
+@app.get("/sso/callback", tags=["sso"])
+async def sso_callback(code: str, state: str) -> RedirectResponse:
+    """
+    Keycloak OIDC callback. Kicseréli a kódot tokenre, lekéri az emailt,
+    majd LearnWorlds magic linket generál és átirányít.
+    """
+    if state not in _oidc_states:
+        raise HTTPException(status_code=400, detail="Érvénytelen OIDC state (CSRF?)")
+    del _oidc_states[state]
+
+    token_url = (
+        f"{settings.keycloak_base_url.rstrip('/')}"
+        f"/realms/{settings.keycloak_realm}"
+        "/protocol/openid-connect/token"
+    )
+    redirect_uri = f"{settings.sso_base_url}/sso/callback"
+
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            token_url,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": settings.keycloak_client_id,
+                "client_secret": settings.keycloak_client_secret,
+                "redirect_uri": redirect_uri,
+            },
+        )
+
+    if not resp.is_success:
+        logger.error("SSO callback: Keycloak token csere sikertelen: %s", resp.text[:300])
+        raise HTTPException(status_code=502, detail="Keycloak token csere sikertelen")
+
+    token_data = resp.json()
+    id_token = token_data.get("id_token", "")
+    if not id_token:
+        raise HTTPException(status_code=502, detail="id_token hiányzik a válaszból")
+
+    # JWT payload dekodálás (nincs verificáció - a Keycloak-tól közvetlenül kaptuk)
+    try:
+        payload_b64 = id_token.split(".")[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        claims = json.loads(base64.b64decode(payload_b64))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="JWT dekodálás sikertelen") from exc
+
+    email = claims.get("email", "").strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email nem található a Keycloak tokenben")
+
+    logger.info("SSO callback: Keycloak auth sikeres, email: %s", email)
+
+    # LearnWorlds user ID keresés
+    try:
+        lw_user_id = await lw_client.get_user_id_by_email(email)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="LearnWorlds API hiba") from exc
+
+    if not lw_user_id:
+        raise HTTPException(status_code=404, detail=f"LearnWorlds user nem található: {email}")
+
+    # LW magic link genérálás
+    try:
+        sso_link = await lw_client.get_sso_link(lw_user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="SSO link generálás sikertelen") from exc
+
+    logger.info("SSO callback: LW magic link redirect, email=%s user=%s", email, lw_user_id)
+    return RedirectResponse(url=sso_link, status_code=302)
 
 
 # ---------------------------------------------------------------------------

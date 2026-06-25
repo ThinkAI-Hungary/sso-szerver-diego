@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Webhook biztonsag
     webhook_secret: str = ""  # ugyanaz, mint KC WEBHOOK_HTTP_SHARED_SECRET
 
+    # SSO callback URL (Railway public URL)
+    sso_base_url: str = "https://sso-szerver-diego-production.up.railway.app"
+
     # Port (Railway automatikusan beallitja)
     port: int = 8000
 
