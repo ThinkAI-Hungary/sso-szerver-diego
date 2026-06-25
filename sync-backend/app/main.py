@@ -1,6 +1,7 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -27,7 +28,24 @@ logger = logging.getLogger(__name__)
 kc_client = KeycloakClient()
 lw_client = LearnWorldsClient()
 
-# Esemenyek, amelyek szinkronizalast triggerenek
+# In-memory store: email -> bejelentkezés időpontja (UTC)
+_recent_lw_logins: dict[str, datetime] = {}
+_LOGIN_TTL_MINUTES = 30
+
+
+def _cleanup_logins() -> None:
+    """Lejárt bejelentkezések törlése."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_LOGIN_TTL_MINUTES)
+    expired = [e for e, t in _recent_lw_logins.items() if t < cutoff]
+    for e in expired:
+        del _recent_lw_logins[e]
+
+
+def _get_recent_emails() -> list[str]:
+    """Az elmúlt 30 percben bejelentkezett emailek listája."""
+    _cleanup_logins()
+    return list(_recent_lw_logins.keys())
+
 SYNC_EVENT_TYPES = {"LOGIN", "REGISTER", "UPDATE_PROFILE"}
 
 
@@ -216,21 +234,138 @@ _LW_LOGIN_HTML = """
 </html>
 """
 
+_LW_CONFIRM_HTML = """
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diego Academy – Belépés megerősítése</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.12);
+      padding: 40px 36px;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .logo { font-size: 28px; font-weight: 700; color: #e63946; letter-spacing: -1px; margin-bottom: 8px; }
+    .logo span { color: #111; }
+    .subtitle { color: #666; font-size: 14px; margin-bottom: 32px; }
+    .email-box {
+      background: #f8f8f8;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 24px;
+      word-break: break-all;
+    }
+    button {
+      width: 100%;
+      padding: 13px;
+      background: #e63946;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background .2s, transform .1s;
+      margin-bottom: 12px;
+    }
+    button:hover { background: #c1121f; }
+    button:active { transform: scale(.98); }
+    .other-link { font-size: 13px; color: #999; }
+    .other-link a { color: #e63946; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">DIEGO<span> ACADEMY</span></div>
+    <p class="subtitle">Bejelentkezés böngészőben</p>
+    <div class="email-box">{email}</div>
+    <form method="POST" action="/lw-login/confirm">
+      <input type="hidden" name="email" value="{email}">
+      <button type="submit">Belépés ezzel a fiókkal</button>
+    </form>
+    <p class="other-link">Nem te vagy? <a href="/lw-login?force=1">Más email</a></p>
+  </div>
+</body>
+</html>
+"""
+
+
+# ---------------------------------------------------------------------------
+# LW Webhook: user login event (automation-ból)
+# ---------------------------------------------------------------------------
+@app.post("/webhook/lw-login", tags=["sso"])
+async def lw_login_webhook(request: Request) -> dict:
+    """
+    LearnWorlds automation webhook fogadása user bejelentkezéskor.
+    A payload-ban lévő user.email-t eltárolja 30 percre.
+    Az /lw-login oldal ezt használja az automatikus belépéshez.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Érvénytelen JSON payload")
+
+    user = body.get("user", {})
+    email = user.get("email", "").strip()
+
+    if not email or "@" not in email:
+        logger.warning("LW webhook: érvénytelen email a payload-ban: %s", body)
+        raise HTTPException(status_code=400, detail="email hiányzik a payload-ból")
+
+    _recent_lw_logins[email] = datetime.now(timezone.utc)
+    logger.info("LW webhook: bejelentkezés rögzítve (email: %s)", email)
+    return {"status": "ok", "email": email}
+
 
 @app.get("/lw-login", tags=["sso"])
 async def lw_login_page(request: Request) -> Response:
     """
     Böngészős belépési oldal.
     Ha az email cookie már be van állítva, automatikusan generál magic linket.
+    Ha van friss LW bejelentkezés (webhook), megmutatja az email-t megerősítésre.
     Ha nincs, email beviteli formot jelenít meg.
     """
     lw_email = request.cookies.get("lw_email")
-    if lw_email:
+    force = request.query_params.get("force") == "1"
+
+    if lw_email and not force:
         logger.info("LW Login: cookie-ból auto-redirect (email: %s)", lw_email)
         return RedirectResponse(
             url=f"/magic-link?email={lw_email}&key={settings.magic_link_secret}",
             status_code=302,
         )
+
+    if not force:
+        recent = _get_recent_emails()
+        if recent:
+            email_to_confirm = recent[0]
+            html = _LW_CONFIRM_HTML.replace("{email}", email_to_confirm)
+            logger.info("LW Login: friss belépés találva, megerősítés megmutatva (%s)", email_to_confirm)
+            return HTMLResponse(content=html)
+
     html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
     return HTMLResponse(content=html)
 
@@ -244,7 +379,7 @@ async def lw_login_submit(request: Request) -> Response:
     email = str(form.get("email", "")).strip()
 
     if not email or "@" not in email:
-        error_html = '<div class="error">Kérjük, adjon meg érvényes email cíet.</div>'
+        error_html = '<div class="error">Kérjük, adjon meg érvényes email címet.</div>'
         html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
         return HTMLResponse(content=html, status_code=400)
 
@@ -261,6 +396,36 @@ async def lw_login_submit(request: Request) -> Response:
         samesite="lax",
     )
     logger.info("LW Login: email cookie beállítva és magic link redirect (email: %s)", email)
+    return response
+
+
+@app.post("/lw-login/confirm", tags=["sso"])
+async def lw_login_confirm(request: Request) -> Response:
+    """
+    Egy gombnyomásos megerősítés a friss webhook-alapu bejelentkezéshez.
+    """
+    form = await request.form()
+    email = str(form.get("email", "")).strip()
+
+    recent = _get_recent_emails()
+    if email not in recent:
+        error_html = '<div class="error">Ez az email nem szerepel a friss belépések között. Próbáld újra az appból.</div>'
+        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", "")
+        return HTMLResponse(content=html, status_code=403)
+
+    response = RedirectResponse(
+        url=f"/magic-link?email={email}&key={settings.magic_link_secret}",
+        status_code=302,
+    )
+    response.set_cookie(
+        key="lw_email",
+        value=email,
+        max_age=365 * 24 * 60 * 60,  # 1 év
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    logger.info("LW Login: megerősített belépés, cookie beállítva (email: %s)", email)
     return response
 
 
