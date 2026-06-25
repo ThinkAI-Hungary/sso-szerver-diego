@@ -104,10 +104,11 @@ class LearnWorldsClient:
         )
         resp.raise_for_status()
         data_json = resp.json()
-        if "access_token" not in data_json:
+        token_data = data_json.get("tokenData") or data_json
+        if "access_token" not in token_data:
             logger.error("LearnWorlds OAuth2 valasz nem tartalmaz access_token-t: %s", data_json)
             raise ValueError(f"access_token hianyzik a valaszbol: {data_json}")
-        token: str = data_json["access_token"]
+        token: str = token_data["access_token"]
         return token
 
     async def get_sso_link(self, user_id: str, redirect_url: str | None = None) -> str:
