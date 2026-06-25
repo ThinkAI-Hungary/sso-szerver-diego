@@ -223,3 +223,38 @@ A LW mobile app WebView-ja szigetelt – nem kommunikál a rendszer böngészőv
 - LW Custom HTML gomb a `/megnyitas` oldalon (kész a kód, berakandó LW-be)
 - LW Automation konfig: "User signs in" → webhook (nem email)
 - Teszt valódi mobilról
+
+---
+
+## 13. Security update szívás (2026-06-25 éjjel, commit c9e216b óta)
+
+### Mi volt a probléma
+- `c9e216b` commit ("security: HMAC-signed lw_email cookie + LW webhook secret verification")
+  ETTőL KEZDVE SZÍVUNK
+- **HMAC cookie aláírás** → régi cookie-k érvénytelenek lesznek, minden user ki lett lépve
+- **Webhook secret** (Bearer Token) → LW Automation nem küldte a headert → 403 → webhook nem ment át → confirm oldal soha nem töltött ki
+- **Confirm oldal eltávolítása** (`bfc7ec8`) → a `{{user.email}}`-es flow teljesen megszakadt
+
+### Mi volt az eredeti jó állapot
+- `add63d3` commit ("feat: webhook-alapu auto-login, confirm oldal, LW automation support")
+- Egyszerű flow: webhook → _recent_lw_logins → confirm oldal (1 kattintás) → magic link → /profile
+
+### Mit javítottunk (de még nem teljesen kész)
+- Cookie aláírás visszavonva (nem szükséges a backend-only domainhez)
+- Webhook secret marad: **Bearer Token** az LW Automationban kell
+- Confirm oldal visszarakva, majd **auto-redirect**-re cserélve (nincs kattintás)
+- page_size 50 → 200 (admin account is megtalálható lett)
+- Email param prioritás: ha URL email eltér a cookie-tól → URL nyer
+- Automation **disabled volt** – be kellett kapcsolni
+- `test@example.com` email a webhookba: az LW Automation "Test" gombja küldi, nem igazi login
+
+### Jelenlegi állapot (commit 98ab89d)
+- Auto-redirect webhook alapján (3 perces TTL) – NINCS kész, nem redirect-el
+- LW Automationban Bearer Token van beállítva
+- LW oldal: Custom HTML blokk van, de a `{{user.email}}`-es automation redirect is fut
+- Railway env: LW_WEBHOOK_SECRET nincs beállítva (warning logban de nem blokkolja)
+
+### Ami még hiányzik
+- Az auto-redirect valódi tesztelése (Railway deploy után)
+- Ha nem megy: visszaállás `add63d3` commitra és onnan indulni
+- LW_WEBHOOK_SECRET beállítása Railway-en (jelenleg üres)
