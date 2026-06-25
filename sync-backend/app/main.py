@@ -3,7 +3,7 @@ import sys
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.config import settings
 from app.keycloak_client import KeycloakClient
@@ -101,6 +101,167 @@ async def magic_link(email: str, key: str | None = None) -> RedirectResponse:
 
     logger.info("Magic link redirect: email=%s lw_user=%s", email, lw_user_id)
     return RedirectResponse(url=sso_link, status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# LW Login oldal (mobilos app -> rendszer böngésző belépés)
+# ---------------------------------------------------------------------------
+_LW_LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diego Academy – Belépés</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.12);
+      padding: 40px 36px;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .logo {
+      font-size: 28px;
+      font-weight: 700;
+      color: #e63946;
+      letter-spacing: -1px;
+      margin-bottom: 8px;
+    }
+    .logo span { color: #111; }
+    .subtitle {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+    label {
+      display: block;
+      text-align: left;
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 6px;
+    }
+    input[type=email] {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .2s;
+      margin-bottom: 20px;
+    }
+    input[type=email]:focus { border-color: #e63946; }
+    button {
+      width: 100%;
+      padding: 13px;
+      background: #e63946;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background .2s, transform .1s;
+    }
+    button:hover { background: #c1121f; }
+    button:active { transform: scale(.98); }
+    .error {
+      background: #fff0f0;
+      color: #c1121f;
+      border: 1px solid #ffb3b3;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .note {
+      font-size: 12px;
+      color: #999;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">DIEGO<span> ACADEMY</span></div>
+    <p class="subtitle">Add meg az email cíedet a böngészős belépéshez</p>
+    {error}
+    <form method="POST" action="/lw-login">
+      <label for="email">Email cím</label>
+      <input type="email" id="email" name="email" placeholder="pelda@email.com"
+             value="{prefill}" required autofocus>
+      <button type="submit">Belépés</button>
+    </form>
+    <p class="note">Az email cíedet megjegyezzük a böngészőben – legközelebb automatikusan lépsz be.</p>
+  </div>
+</body>
+</html>
+"""
+
+
+@app.get("/lw-login", tags=["sso"])
+async def lw_login_page(request: Request) -> Response:
+    """
+    Böngészős belépési oldal.
+    Ha az email cookie már be van állítva, automatikusan generál magic linket.
+    Ha nincs, email beviteli formot jelenít meg.
+    """
+    lw_email = request.cookies.get("lw_email")
+    if lw_email:
+        logger.info("LW Login: cookie-ból auto-redirect (email: %s)", lw_email)
+        return RedirectResponse(
+            url=f"/magic-link?email={lw_email}&key={settings.magic_link_secret}",
+            status_code=302,
+        )
+    html = _LW_LOGIN_HTML.replace("{error}", "").replace("{prefill}", "")
+    return HTMLResponse(content=html)
+
+
+@app.post("/lw-login", tags=["sso"])
+async def lw_login_submit(request: Request) -> Response:
+    """
+    Email form submit: cookie-t állít be, majd magic linket generál.
+    """
+    form = await request.form()
+    email = str(form.get("email", "")).strip()
+
+    if not email or "@" not in email:
+        error_html = '<div class="error">Kérjük, adjon meg érvényes email cíet.</div>'
+        html = _LW_LOGIN_HTML.replace("{error}", error_html).replace("{prefill}", email)
+        return HTMLResponse(content=html, status_code=400)
+
+    response = RedirectResponse(
+        url=f"/magic-link?email={email}&key={settings.magic_link_secret}",
+        status_code=302,
+    )
+    response.set_cookie(
+        key="lw_email",
+        value=email,
+        max_age=365 * 24 * 60 * 60,  # 1 év
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    logger.info("LW Login: email cookie beállítva és magic link redirect (email: %s)", email)
+    return response
 
 
 # ---------------------------------------------------------------------------
